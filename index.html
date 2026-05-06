@@ -813,14 +813,38 @@ function normalize(s){
     .replace(/[\u201c\u201d]/g,'"').replace(/[\u2018\u2019]/g,"'");
 }
 
-function checkAnswer(val,answers){
+function checkAnswer(val,answers,opts){
   var v=normalize(val);
   if(!v)return false;
+  // Strict match against accepted answers
   for(var i=0;i<answers.length;i++){
     var a=normalize(answers[i]);
     if(a===v)return true;
     var lo=v.length<a.length?v:a,hi=v.length<a.length?a:v;
     if(hi.length-lo.length<=4&&hi.indexOf(lo)!==-1)return true;
+  }
+  // Lenient match for 残缺 categories: accept any answer that contains
+  // the original sentence as a subsequence AND is longer (i.e. the user
+  // inserted some text to fill the missing component).
+  if(opts && opts.cat && opts.original && (opts.cat==='主语残缺' || opts.cat==='宾语残缺')){
+    var orig = normalize(opts.original);
+    // Strip trailing punctuation from both for fair compare
+    var stripPunct = function(s){ return s.replace(/[，。！？、；：]+$/, ''); };
+    var ov = stripPunct(v);
+    var oo = stripPunct(orig);
+    // User answer must be strictly longer (something inserted)
+    if(ov.length > oo.length){
+      // Check oo is a subsequence of ov in order
+      var oi = 0;
+      for(var vi = 0; vi < ov.length && oi < oo.length; vi++){
+        if(ov[vi] === oo[oi]) oi++;
+      }
+      if(oi === oo.length){
+        // Original is fully embedded — user inserted text. Require the inserted
+        // gap to be at least 1 chinese char (avoid trivial accepts like adding "了").
+        if(ov.length - oo.length >= 1) return true;
+      }
+    }
   }
   return false;
 }
@@ -873,7 +897,10 @@ function submitPrac(btn){
   var card=btn.closest('.q-card');
   var inp=card.querySelector('.q-input');
   var answers=JSON.parse(inp.dataset.answers);
-  var ok=checkAnswer(inp.value,answers);
+  var cat = card.dataset.cat;
+  var sentenceEl = card.querySelector('.q-sentence');
+  var original = sentenceEl ? sentenceEl.textContent : '';
+  var ok=checkAnswer(inp.value,answers,{cat:cat,original:original});
   inp.readOnly=true;
   inp.classList.add(ok?'ok':'ng');
   btn.disabled=true;
@@ -1042,7 +1069,23 @@ function submitPass(idx){
     if(!sel||sel.disabled)return;
     var typeVal=sel.value;
     var typeOk=(normalize(typeVal)===normalize(err.type));
-    var corrOk=checkAnswer(inp.value,[err.correct]);
+    var corrOk;
+    if(err.type === '主语残缺' || err.type === '宾语残缺'){
+      // Find underlined span for this question
+      var p = PASSAGES[idx];
+      var underlined = '';
+      var allSegs = (p.para1 || []).concat(p.para2 || []);
+      for(var si = 0; si < allSegs.length; si++){
+        if(allSegs[si].q === err.q){
+          var um = allSegs[si].text.match(/<u>(.+?)<\/u>/);
+          if(um) underlined = um[1];
+          break;
+        }
+      }
+      corrOk = checkAnswer(inp.value, [err.correct], {cat:err.type, original:underlined});
+    } else {
+      corrOk = checkAnswer(inp.value, [err.correct]);
+    }
     var corrVal=inp.value.trim();
     var typeRow=fb.querySelector('.fb-type-yours');
     typeRow.textContent=typeVal||'（未选择）';
